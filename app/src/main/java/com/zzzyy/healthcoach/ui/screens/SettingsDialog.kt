@@ -30,6 +30,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.zzzyy.healthcoach.data.advice.ModelConfig
@@ -72,6 +73,9 @@ fun SettingsDialog(
     var baseUrl by remember { mutableStateOf(state.modelBaseUrl) }
     var model by remember { mutableStateOf(state.modelName) }
     var apiKey by remember { mutableStateOf(state.modelApiKey) }
+    // 换设备/换包名迁移时，加密密钥解不开，需要把已保存的值显示出来抄写。
+    // 默认遮蔽，点按钮才显示；不写日志、不落文件。
+    var showApiKey by remember { mutableStateOf(false) }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -165,10 +169,13 @@ fun SettingsDialog(
                     onValueChange = { apiKey = it },
                     label = { Text("API Key") },
                     singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.small,
                 )
+                TextButton(onClick = { showApiKey = !showApiKey }) {
+                    Text(if (showApiKey) "隐藏密钥" else "显示已保存的密钥（迁移到新版本时抄写用）")
+                }
                 Text(
                     "密钥只保存在这台手机里，不会上传到除模型端点以外的任何地方。",
                     style = MaterialTheme.typography.bodySmall,
@@ -453,6 +460,7 @@ fun WebDavSection(state: UiState, viewModel: HealthViewModel) {
     var baseUrl by remember { mutableStateOf(state.webDav.baseUrl) }
     var username by remember { mutableStateOf(state.webDav.username) }
     var password by remember { mutableStateOf(state.webDav.password) }
+    var showPassword by remember { mutableStateOf(false) }
     var folder by remember { mutableStateOf(state.webDav.folder) }
     var autoBackup by remember { mutableStateOf(state.webDav.autoBackup) }
 
@@ -486,10 +494,13 @@ fun WebDavSection(state: UiState, viewModel: HealthViewModel) {
             onValueChange = { password = it },
             label = { Text("密码") },
             singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
             modifier = Modifier.weight(1f),
             shape = MaterialTheme.shapes.small,
         )
+        TextButton(onClick = { showPassword = !showPassword }) {
+            Text(if (showPassword) "隐藏" else "显示")
+        }
     }
     OutlinedTextField(
         value = folder,

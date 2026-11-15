@@ -21,6 +21,18 @@
 没有设备、或设备数据没同步（本地库空、云端也没数据）→ 打开就是空的，
 这不是 bug，是前提不满足。
 
+## 下载
+
+不想自己编译的话，直接下现成的 APK：
+
+**[⬇️ 康伴 1.0 · kangban-1.0-release.apk](https://github.com/zzzyygh/health-coach/releases/download/v1.0/kangban-1.0-release.apk)**（14 MB，Android 8.0+）
+
+- APK SHA-256：`12645268d73bcca739b56e1f37f3523aefe46eb1926dfc82cbfe02114a4539f5`
+- 签名证书 SHA-256：`ab32e58bf7326e1eb645adff4ccd6033bddba7c0fa64c62dd7e778e5d8eb97b8`（CN=health-coach）
+- 校验：`apksigner verify --print-certs kangban-1.0-release.apk`
+
+完整的版本说明见 [Releases 页面](https://github.com/zzzyygh/health-coach/releases/tag/v1.0)。
+
 ---
 
 ## 它和别的健康 App 有什么不同
