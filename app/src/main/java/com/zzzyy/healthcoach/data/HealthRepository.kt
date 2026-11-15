@@ -296,8 +296,40 @@ class HealthRepository(context: Context) {
                                 TAG,
                                 "云端 sleep 字段清单=${record.value.keys().asSequence().toList()}",
                             )
+                            // 诊断用：把关键字段的**真实取值**打出来，确认时间戳单位与字段含义。
+                            // 只有时间戳/时长/心率这几项，不含逐条明细。
+                            val items = record.value.optJSONArray("items")
+                            android.util.Log.i(
+                                TAG,
+                                "云端 sleep 原始值：time=${record.time} " +
+                                    "bedtime=${record.value.optString("bedtime")} " +
+                                    "wake_up_time=${record.value.optString("wake_up_time")} " +
+                                    "bed_timestamp=${record.value.optString("bed_timestamp")} " +
+                                    "device_bedtime=${record.value.optString("device_bedtime")} " +
+                                    "device_wake=${record.value.optString("device_wake_up_time")} " +
+                                    "deep=${record.value.optString("sleep_deep_duration")} " +
+                                    "light=${record.value.optString("sleep_light_duration")} " +
+                                    "rem=${record.value.optString("sleep_rem_duration")} " +
+                                    "awake=${record.value.optString("sleep_awake_duration")} " +
+                                    "eff=${record.value.optString("sleep_efficiency")} " +
+                                    "avg_hr=${record.value.optString("avg_hr")} " +
+                                    "avg_hrv=${record.value.optString("avg_hrv")} " +
+                                    "avg_spo2=${record.value.optString("avg_spo2")} " +
+                                    "min_spo2=${record.value.optString("min_spo2")} " +
+                                    "items=${items?.length()}",
+                            )
+                            android.util.Log.i(TAG, "云端 sleep items[0]=${items?.optJSONObject(0)}")
                         }
-                        val sleep = SleepSummary.fromCloudJson(record.value) ?: continue
+                        val sleep = SleepSummary.fromCloudJson(record.value)
+                        if (sleep == null) {
+                            if (loggedKeys.add("sleep-parse-null")) {
+                                android.util.Log.w(
+                                    TAG,
+                                    "云端 sleep 解析失败（bedtime/wake 校验没过），time=${record.time}",
+                                )
+                            }
+                            continue
+                        }
                         val day = bucket(date)
                         val existing = day.sleep
                         if (existing == null || sleep.asleepMinutes > existing.asleepMinutes) {
