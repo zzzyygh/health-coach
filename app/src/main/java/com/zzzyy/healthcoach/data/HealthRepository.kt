@@ -77,7 +77,11 @@ class HealthRepository(context: Context) {
     suspend fun hasRoot(): Boolean = withContext(Dispatchers.IO) { RootShell.isAvailable() }
 
     /** 拉取最近 [days] 天的数据并合并入库。 */
-    suspend fun sync(days: Int = 30, incrementalSince: Long = 0L): SyncReport = withContext(Dispatchers.IO) {
+    suspend fun sync(
+        days: Int = 30,
+        incrementalSince: Long = 0L,
+        cloudOnly: Boolean = false,
+    ): SyncReport = withContext(Dispatchers.IO) {
         val sinceDate = daysAgoIso(days)
         android.util.Log.i(TAG, "sync 开始：范围 $days 天（since=$sinceDate）")
         var localDays = 0
@@ -88,7 +92,12 @@ class HealthRepository(context: Context) {
 
         // ── 本地 ──────────────────────────────────────────────
         val rootAvailable = RootShell.isAvailable()
-        if (rootAvailable) {
+        if (cloudOnly) {
+            // 仅云端模式：故意不读本地库。
+            // 给无 root 用户一个等效路径，也用来验证「云端单独能撑到什么程度」。
+            localError = "仅云端模式：已跳过本地库"
+            android.util.Log.i(TAG, "sync：仅云端模式，跳过本地库读取")
+        } else if (rootAvailable) {
             try {
                 val local = localDb.readDays(sinceDate)
                 localDays = local.size

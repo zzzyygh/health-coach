@@ -47,6 +47,8 @@ data class UiState(
     /** AI 分析窗口天数 */
     val adviceWindowDays: Int = 7,
     val rootAvailable: Boolean = false,
+    /** 仅云端模式：跳过本地库（无 root 场景的等效路径，也用于验证云端数据完整性） */
+    val cloudOnly: Boolean = false,
     val tokenUsable: Boolean = false,
     val modelConfigured: Boolean = false,
     val modelPresetId: String = com.zzzyy.healthcoach.data.advice.ModelPreset.MINIMAX.id,
@@ -136,6 +138,7 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                 adviceWindowDays = getApplication<Application>().getSharedPreferences("advice_prefs", android.content.Context.MODE_PRIVATE)
                     .getInt("window_days", 7),
                 rootAvailable = root,
+                cloudOnly = syncPrefs.getBoolean(KEY_CLOUD_ONLY, false),
                 tokenUsable = repository.hasToken(),
                 modelConfigured = modelStore.load().isConfigured,
                 modelPresetId = modelStore.load().presetId,
@@ -181,7 +184,8 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                     "云端起点=${if (incrementalSince > 0) java.util.Date(incrementalSince * 1000) else "全量"}",
             )
             _state.value = _state.value.copy(syncing = true, syncDetail = null)
-            val report = repository.sync(days, incrementalSince)
+            val cloudOnly = syncPrefs.getBoolean(KEY_CLOUD_ONLY, false)
+            val report = repository.sync(days, incrementalSince, cloudOnly)
             val detail = buildString {
                 append("本地 ${report.localDays} 天")
                 if (report.localError != null) append("（${report.localError}）")
@@ -645,6 +649,24 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_LAST_SYNC = "last_sync_at"
         const val KEY_LAST_SYNC_DAY = "last_sync_day"
         const val KEY_LAST_CHECKIN_DAY = "last_checkin_day"
+        const val KEY_CLOUD_ONLY = "cloud_only"
+    }
+
+    /**
+     * 开关「仅云端模式」。
+     *
+     * 为什么要这个开关：
+     *  1. 给**没有 root** 的用户一个明确路径（他们的真实场景就是只有云端）；
+     *  2. 验证云端数据是否完整 —— 有 root 时云端结果会被本地覆盖合并，
+     *     不开这个开关就永远看不出云端单独能撑到什么程度。
+     */
+    fun setCloudOnly(enabled: Boolean) {
+        syncPrefs.edit().putBoolean(KEY_CLOUD_ONLY, enabled).apply()
+        android.util.Log.i("HealthCoach.Sync", "仅云端模式 -> $enabled（下次同步生效）")
+        _state.value = _state.value.copy(
+            cloudOnly = enabled,
+            statusMessage = if (enabled) "已开启仅云端模式：下次同步跳过本地库" else "已关闭仅云端模式",
+        )
     }
 
     fun dismissMessage() {

@@ -200,6 +200,27 @@ fun SettingsDialog(
 
                 WebDavSection(state, viewModel)
 
+                Eyebrow("同步")
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("仅云端模式", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "跳过本地库，只用小米云端数据。没 root 的手机就是这个状态；" +
+                                "有 root 时也可用来对比两边数据是否一致。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Switch(
+                        checked = state.cloudOnly,
+                        onCheckedChange = { viewModel.setCloudOnly(it) },
+                    )
+                }
+
                 Eyebrow("小米账号")
                 if (state.tokenUsable) {
                     Text(
