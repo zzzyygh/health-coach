@@ -130,8 +130,9 @@ class HealthRepository(context: Context) {
      * 云端聚合。
      *
      * 对应 `.work/mifit_export.py`：逐条拉 key，按天汇总。
-     * 注意云端**没有**静息心率、**也没有**压力
-     * （实测 `huami_all_day_stress_record` 返回 0 条），这两个只能来自本地库。
+     * 压力确实没有（实测 `huami_all_day_stress_record` 返回 0 条）。
+     * 静息心率：旧结论是「云端没有」，但旧代码从未真正请求过 `resting_heart_rate`，
+     * 现在把它加进 `CLOUD_KEYS` 实测验证，见那里的注释。
      * 云端的 sleep 记录里**有** rem / awake / awake_count / items，字段名与本地一致。
      */
     private suspend fun pullCloud(
@@ -150,11 +151,36 @@ class HealthRepository(context: Context) {
         // 页数要跟着天数走：心率一天约 686 条，固定 40 页只够 40~50 天。
         // 这里按「天 × 4 页」给，最低 60 页，宁可多发几次请求也不要静默少数据。
         val maxPages = (days * 4).coerceAtLeast(60)
+        // 云端静息心率：以前以为「云端没有」，但那是旧结论，现在按实验验证一遍。
+        // 若云端确实没有，这个 key 会返回 0 条或报错 —— 下面的 try/catch 保证不影响其它 key。
+        val restingByDay = linkedMapOf<String, Int>()
+        val loggedKeys = mutableSetOf<String>()
         for (key in CLOUD_KEYS) {
-            val records = client.pullSince(key, since, maxPages = maxPages)
+            val records = try {
+                client.pullSince(key, since, maxPages = maxPages)
+            } catch (e: Exception) {
+                // 单个 key 失败不能拖垮整次同步（旧实现是会抛到外层、整段云端全丢）
+                android.util.Log.w(
+                    TAG,
+                    "云端 key=$key 拉取失败，跳过：${e.javaClass.simpleName} ${e.message}",
+                )
+                continue
+            }
             for (record in records) {
                 val date = isoOf(record.time)
                 when (key) {
+                    "resting_heart_rate" -> {
+                        val bpm = record.value.optInt("bpm", 0)
+                        if (bpm in 25..220) {
+                            restingByDay[date] = bpm
+                        } else if (loggedKeys.add(key)) {
+                            // 只打字段名，不打具体值
+                            android.util.Log.w(
+                                TAG,
+                                "云端 resting_heart_rate 字段不认识，value 的键=${record.value.keys().asSequence().toList()}",
+                            )
+                        }
+                    }
                     "steps" -> {
                         val day = bucket(date)
                         buckets[date] = day.copy(
@@ -223,14 +249,35 @@ class HealthRepository(context: Context) {
                 )
             )
         }
+        restingByDay.forEach { (date, bpm) ->
+            val day = bucket(date)
+            buckets[date] = day.copy(restingHeartRate = bpm)
+        }
+        android.util.Log.i(
+            TAG,
+            "云端静息心率：拿到 ${restingByDay.size} 天" +
+                if (restingByDay.isEmpty()) "（该 key 云端没有数据）" else "",
+        )
+        // 日期本身不是敏感值，打出来便于核对「云端到底覆盖了哪几天」
+        if (restingByDay.isNotEmpty()) {
+            android.util.Log.d(TAG, "云端静息心率日期：${restingByDay.keys.sorted()}")
+        }
 
         return buckets.values.filter { it.hasData }
     }
 
     companion object {
         private const val TAG = "HealthCoach.Repository"
-        /** 云端可用的 key。注意：没有静息心率。 */
-        val CLOUD_KEYS = listOf("steps", "calories", "valid_stand", "heart_rate", "spo2", "sleep")
+        /** 云端可用的 key。`resting_heart_rate` 是**实验性加入**：以前以为云端没有，现在验证。 */
+        val CLOUD_KEYS = listOf(
+            "steps",
+            "calories",
+            "valid_stand",
+            "heart_rate",
+            "spo2",
+            "sleep",
+            "resting_heart_rate",
+        )
 
         fun daysAgoIso(days: Int): String {
             val calendar = Calendar.getInstance(TimeZone.getDefault())
