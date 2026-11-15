@@ -217,6 +217,42 @@ fun SettingsDialog(
                 TextButton(onClick = { viewModel.startQrLogin() }) {
                     Text("获取登录二维码")
                 }
+
+                // 扫码失败时的兜底：passToken 从浏览器 cookie 拿，不依赖任何 App 的扫码能力
+                var showManual by remember { mutableStateOf(false) }
+                var manualUserId by remember { mutableStateOf("") }
+                var manualPassToken by remember { mutableStateOf("") }
+                TextButton(onClick = { showManual = !showManual }) {
+                    Text(if (showManual) "收起手动登录" else "扫码不行？手动填 passToken")
+                }
+                if (showManual) {
+                    Text(
+                        "电脑浏览器登录 account.xiaomi.com 后，在开发者工具 → Application → Cookies 里找 " +
+                            "userId 和 passToken，粘贴到这里。passToken 长期有效，填一次就行。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = manualUserId,
+                        onValueChange = { manualUserId = it.filter { c -> c.isDigit() } },
+                        label = { Text("userId（纯数字）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.small,
+                    )
+                    OutlinedTextField(
+                        value = manualPassToken,
+                        onValueChange = { manualPassToken = it.trim() },
+                        label = { Text("passToken") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.small,
+                    )
+                    TextButton(
+                        onClick = { viewModel.loginWithPassTokenManual(manualUserId, manualPassToken) },
+                    ) { Text("用这对凭证登录") }
+                }
                 state.qrBitmap?.let { bitmap ->
                     Image(
                         bitmap.asImageBitmap(),

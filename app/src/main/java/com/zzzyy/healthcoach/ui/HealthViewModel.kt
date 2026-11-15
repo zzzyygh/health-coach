@@ -519,6 +519,39 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    /**
+     * 手动用 passToken 登录（扫码失败时的兜底）。
+     *
+     * 为什么需要：扫码要依赖小米某个官方 App 支持扫这个码，版本和入口都可能变。
+     * 而 passToken 可以从**浏览器 cookie** 里直接拿到（登录 account.xiaomi.com 后，
+     * 在开发者工具里找 passToken 和 userId），这条路不依赖任何 App 的扫码能力。
+     */
+    fun loginWithPassTokenManual(userId: String, passToken: String) {
+        viewModelScope.launch {
+            if (userId.isBlank() || passToken.isBlank()) {
+                _state.value = _state.value.copy(statusMessage = "userId 和 passToken 都要填")
+                return@launch
+            }
+            _state.value = _state.value.copy(statusMessage = "正在用 passToken 登录…")
+            try {
+                val token = MiAuth().loginWithPassToken(
+                    passToken = passToken.trim(),
+                    userId = userId.trim(),
+                    deviceId = "",
+                )
+                tokenStore.save(token)
+                _state.value = _state.value.copy(
+                    tokenUsable = token.isUsable,
+                    statusMessage = if (token.isUsable) "登录成功，可以同步云端数据了" else "凭证不完整，检查 passToken 是否正确",
+                )
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(
+                    statusMessage = "登录失败：${e.message ?: e.javaClass.simpleName}",
+                )
+            }
+        }
+    }
+
     /** 扫码登录：先取二维码，再等用户扫。 */
     fun startQrLogin() {
         viewModelScope.launch {
