@@ -43,6 +43,8 @@ class HealthRepository(context: Context) {
         val tokenUsable: Boolean = false,
         /** 本次云端实际拉到的原始记录条数（0 通常意味着手机上的小米运动健康还没同步） */
         val cloudRecords: Int = 0,
+        /** 本次拉取失败的指标名（网络抖动时会有，界面要显示出来，不能静默缺数据） */
+        val failedKeys: List<String> = emptyList(),
     )
 
     fun loadDays(): List<HealthDay> = store.loadDays()
@@ -89,6 +91,7 @@ class HealthRepository(context: Context) {
         var localError: String? = null
         var cloudError: String? = null
         var cloudRecords = 0
+        var failedKeys = emptyList<String>()
 
         // ── 本地 ──────────────────────────────────────────────
         val rootAvailable = RootShell.isAvailable()
@@ -117,6 +120,7 @@ class HealthRepository(context: Context) {
                 val pull = pullCloud(token, days, incrementalSince)
                 cloudDays = pull.days.size
                 cloudRecords = pull.records
+                failedKeys = pull.failedKeys
                 if (pull.days.isNotEmpty()) store.mergeDays(pull.days)
             } catch (e: Exception) {
                 cloudError = e.message ?: e.javaClass.simpleName
@@ -139,6 +143,7 @@ class HealthRepository(context: Context) {
             rootAvailable = rootAvailable,
             tokenUsable = tokenUsable,
             cloudRecords = cloudRecords,
+            failedKeys = failedKeys,
         )
     }
 
@@ -151,7 +156,11 @@ class HealthRepository(context: Context) {
      * 现在把它加进 `CLOUD_KEYS` 实测验证，见那里的注释。
      * 云端的 sleep 记录里**有** rem / awake / awake_count / items，字段名与本地一致。
      */
-    private data class CloudPull(val days: List<HealthDay>, val records: Int)
+    private data class CloudPull(
+        val days: List<HealthDay>,
+        val records: Int,
+        val failedKeys: List<String> = emptyList(),
+    )
 
     private suspend fun pullCloud(
         token: com.zzzyy.healthcoach.data.cloud.MiToken,
@@ -187,6 +196,7 @@ class HealthRepository(context: Context) {
         // 只能拿原始采样自己算（见 NightHeartRate.kt）
         val allHrSamples = mutableListOf<Pair<Long, Int>>()
         val loggedKeys = mutableSetOf<String>()
+        val failedKeys = mutableListOf<String>()
         var sleepPayloadLogged = false
         for (key in CLOUD_KEYS) {
             val records = try {
@@ -210,6 +220,7 @@ class HealthRepository(context: Context) {
                     TAG,
                     "云端 key=$key 拉取失败，跳过：${e.javaClass.simpleName} ${e.message}",
                 )
+                failedKeys += key
                 continue
             }
             recordCount += records.size
@@ -383,7 +394,7 @@ class HealthRepository(context: Context) {
             "云端本轮共发出 ${client.requestCount} 个请求（窗口 ${isoOf(since)} 起），" +
                 "拿到 $recordCount 条原始记录",
         )
-        return CloudPull(buckets.values.filter { it.hasData }, recordCount)
+        return CloudPull(buckets.values.filter { it.hasData }, recordCount, failedKeys)
     }
 
     companion object {

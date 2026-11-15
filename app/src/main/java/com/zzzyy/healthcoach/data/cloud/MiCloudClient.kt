@@ -50,6 +50,32 @@ class MiCloudClient(
 
     /** 调用一个 hlth.io.mi.com 接口，返回解密后的 JSON。 */
     suspend fun call(path: String, payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        // DNS / 连接这类瞬时故障在这台机器上实测会间歇出现（连续请求时尤甚），
+        // 一次失败就跳过某个 key，会让用户看到「某几项没数据」却不知道为什么。
+        // 这里对**可恢复的**网络异常退避重试两次：1.5 秒、4 秒。
+        var attempt = 0
+        while (true) {
+            try {
+                return@withContext callOnce(path, payload)
+            } catch (e: java.net.UnknownHostException) {
+                if (attempt >= MAX_NET_RETRIES) throw e
+                val wait = RETRY_BACKOFF_MS[attempt]
+                android.util.Log.w(TAG, "DNS 解析失败，${wait}ms 后重试（第 ${attempt + 1} 次）：${e.message}")
+                attempt++
+                kotlinx.coroutines.delay(wait)
+            } catch (e: java.net.SocketTimeoutException) {
+                if (attempt >= MAX_NET_RETRIES) throw e
+                val wait = RETRY_BACKOFF_MS[attempt]
+                android.util.Log.w(TAG, "连接超时，${wait}ms 后重试（第 ${attempt + 1} 次）")
+                attempt++
+                kotlinx.coroutines.delay(wait)
+            }
+        }
+        @Suppress("UNREACHABLE_CODE")
+        throw IllegalStateException("unreachable")
+    }
+
+    private suspend fun callOnce(path: String, payload: JSONObject): JSONObject {
         requestCount++
         val nonce = MiCrypto.generateNonce(0)
         val plain = payload.toString()
@@ -70,7 +96,7 @@ class MiCloudClient(
             .get()
             .build()
 
-        client.newCall(request).execute().use { response ->
+        return client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (response.code == 401) {
                 throw AuthException("登录已失效（401），请重新扫码登录")
@@ -192,6 +218,8 @@ class MiCloudClient(
         private const val TAG = "HealthCoach.Cloud"
         /** 翻页之间的最小间隔，见 pullSince 里的说明。 */
         private const val PAGE_INTERVAL_MS = 250L
+        private const val MAX_NET_RETRIES = 2
+        private val RETRY_BACKOFF_MS = longArrayOf(1500L, 4000L)
 
         const val PATH_FITNESS_BY_TIME = "/app/v1/data/get_fitness_data_by_time"
 

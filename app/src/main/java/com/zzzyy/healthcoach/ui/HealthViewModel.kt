@@ -191,6 +191,9 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                 if (report.localError != null) append("（${report.localError}）")
                 append("，云端 ${report.cloudDays} 天")
                 if (report.cloudError != null) append("（${report.cloudError}）")
+                if (report.failedKeys.isNotEmpty()) {
+                    append("（${report.failedKeys.size} 项拉取失败：${report.failedKeys.joinToString("、")}）")
+                }
                 append("，共 ${report.totalDays} 天")
             }
             val finishedAt = System.currentTimeMillis()
