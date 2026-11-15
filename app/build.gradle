@@ -4,6 +4,16 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose'
 }
 
+// ── release 签名 ────────────────────────────────────────────────
+// 密钥与密码都放在**仓库之外**（keystore.properties 已被 .gitignore 排除），
+// 这样 clone 下来的人拿不到私钥；他们构建 release 时会回退到 debug 签名。
+def keystorePropsFile = rootProject.file('keystore.properties')
+def externalKeystore = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { externalKeystore.load(it) }
+}
+def hasReleaseKey = keystorePropsFile.exists() && externalKeystore['storeFile']
+
 android {
     namespace 'com.zzzyy.healthcoach'
     compileSdk 35
@@ -27,6 +37,15 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        // 只有本机放了 keystore.properties 才会有这个配置
+        if (hasReleaseKey) {
+            release {
+                storeFile file(externalKeystore['storeFile'])
+                storePassword externalKeystore['storePassword']
+                keyAlias externalKeystore['keyAlias']
+                keyPassword externalKeystore['keyPassword']
+            }
+        }
     }
 
     testOptions {
@@ -40,7 +59,8 @@ android {
         }
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
+            // 有正式密钥就用正式的；没有（别人 clone 的仓库）回退 debug 签名，保证能构建
+            signingConfig hasReleaseKey ? signingConfigs.release : signingConfigs.debug
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

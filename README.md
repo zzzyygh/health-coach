@@ -251,6 +251,26 @@ root 或登录问题，否则 AI 分析没有输入。
 项目自带 `keystore/debug.keystore`（公开的通用调试密钥），也可以删掉让
 Gradle 使用默认 debug 签名。
 
+### 构建 release
+
+```bash
+./gradlew :app:assembleRelease
+```
+
+release 默认**回退到 debug 签名**（保证任何人 clone 下来都能构建）。
+要打正式签名，在仓库根目录放一个 `keystore.properties`（已被 `.gitignore` 排除，
+**绝不要提交**）：
+
+```properties
+storeFile=/绝对路径/release.jks
+storePassword=...
+keyAlias=...
+keyPassword=...
+```
+
+仓库里没有、也不会有这份文件和私钥——**换机器就构建不出相同签名的包**，
+所以正式发布前请自己备份 keystore。
+
 ## 免责声明
 
 **本 App 不是医疗器械，任何输出都不构成医学诊断。**

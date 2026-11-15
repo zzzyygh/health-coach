@@ -24,3 +24,6 @@ local.properties
 # 日志与临时文件
 *.log
 captures/
+
+# release 签名配置（含密码，绝不提交）
+keystore.properties
