@@ -111,7 +111,7 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
         // 界面上会显示「无数据」。这时必须无视限频强制重同步一次，否则永远补不上。
         if (repository.needsUpgrade()) {
             android.util.Log.i("HealthCoach.Sync", "检测到落盘数据版本落后，强制重新同步一次")
-            sync(days = 30, force = true, alsoCheckIn = true)
+            sync(days = 30, force = true, alsoCheckIn = true, fullPull = true)
         } else if (shouldSyncToday()) {
             android.util.Log.i("HealthCoach.Sync", "今天第一次打开（${loggingDayKey()}），同步一次")
             sync(days = 30, alsoCheckIn = true)
@@ -148,26 +148,37 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun sync(days: Int = 30, force: Boolean = false, alsoCheckIn: Boolean = false) {
+    /**
+     * 同步。
+     *
+     * 云端请求量口径（2026-11-15 按用户意见定）：
+     *  - **首次**（从没同步过）→ 全量，把历史拉回来；
+     *  - **之后每天第一次打开** → 只拉「昨天 00:00 起」，一般每个 key 一页，约 8~16 个请求；
+     *  - **用户手动点「同步 N 天」** → [fullPull] = true，按所选窗口全量（用户明确要这段历史）。
+     *
+     * 如果这次增量一条新数据都没拉到，说明手机上的小米运动健康还没同步，
+     * 界面提示「请先打开小米运动健康同步数据后重试」，而不是让用户以为 App 坏了。
+     */
+    fun sync(
+        days: Int = 30,
+        force: Boolean = false,
+        alsoCheckIn: Boolean = false,
+        fullPull: Boolean = false,
+    ) {
         viewModelScope.launch {
-            // 增量水位：上次同步成功时间往前留 6 小时重叠。
-            // 以前每次同步都是「按天全量重拉」（90 天约 60~80 个请求），
-            // 一天内多点几次就会把请求量翻几倍 —— 这才是真实的风控风险来源。
             val lastSyncAt = syncPrefs.getLong(KEY_LAST_SYNC, 0L)
-            val lastFullSyncAt = syncPrefs.getLong(KEY_LAST_FULL_SYNC, 0L)
             // 判定逻辑抽成纯函数（data/cloud/SyncCadence.kt），有单测覆盖
-            val incrementalSince = com.zzzyy.healthcoach.data.cloud.incrementalSinceSeconds(
-                lastSyncAtMillis = lastSyncAt,
-                lastFullSyncAtMillis = lastFullSyncAt,
-                nowMillis = System.currentTimeMillis(),
-                overlapSeconds = INCREMENTAL_OVERLAP_SECONDS,
-                fullIntervalMs = FULL_SYNC_INTERVAL_MS,
-            )
+            val incrementalSince = if (fullPull) 0L else {
+                com.zzzyy.healthcoach.data.cloud.syncStartSeconds(
+                    lastSyncAtMillis = lastSyncAt,
+                    nowMillis = System.currentTimeMillis(),
+                )
+            }
             android.util.Log.i(
                 "HealthCoach.Sync",
-                "开始同步：$days 天，force=$force，" +
+                "开始同步：$days 天，force=$force，fullPull=$fullPull，" +
                     "上次同步=${if (lastSyncAt > 0) java.util.Date(lastSyncAt) else "从未"}，" +
-                    "增量水位=${if (incrementalSince > 0) java.util.Date(incrementalSince * 1000) else "全量"}",
+                    "云端起点=${if (incrementalSince > 0) java.util.Date(incrementalSince * 1000) else "全量"}",
             )
             _state.value = _state.value.copy(syncing = true, syncDetail = null)
             val report = repository.sync(days, incrementalSince)
@@ -183,9 +194,17 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                 .putLong(KEY_LAST_SYNC, finishedAt)
                 .putString(KEY_LAST_SYNC_DAY, loggingDayKey())
                 .apply()
-            // 只有「本次确实是全量」才刷新全量水位，否则会把下次也误判成刚全量过
-            if (incrementalSince == 0L) {
-                syncPrefs.edit().putLong(KEY_LAST_FULL_SYNC, finishedAt).apply()
+            // 增量没拉到任何新记录 → 多半是手机上的小米运动健康还没同步，提示用户去那边先同步
+            val staleNotice = if (!fullPull && report.tokenUsable && report.cloudError == null &&
+                report.cloudRecords == 0
+            ) {
+                android.util.Log.i(
+                    "HealthCoach.Sync",
+                    "增量窗口内云端 0 条记录（本地 ${report.localDays} 天），提示用户先同步小米运动健康",
+                )
+                "本次没拉到新数据：请先打开「小米运动健康」同步一次，再回来点同步"
+            } else {
+                null
             }
             val loaded = repository.loadDays()
             _state.value = _state.value.copy(
@@ -194,6 +213,7 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                 syncDetail = detail,
                 rootAvailable = report.rootAvailable,
                 tokenUsable = report.tokenUsable,
+                statusMessage = staleNotice ?: _state.value.statusMessage,
             )
             if (alsoCheckIn) maybeShowMorningCheckIn(loaded)
             maybeAutoBackup()
@@ -624,11 +644,6 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val KEY_LAST_SYNC = "last_sync_at"
         const val KEY_LAST_SYNC_DAY = "last_sync_day"
-        const val KEY_LAST_FULL_SYNC = "last_full_sync_at"
-        /** 增量同步的重叠窗口：防止跨零点/云端延迟补写被漏掉 */
-        const val INCREMENTAL_OVERLAP_SECONDS = 6 * 3600L
-        /** 每隔这么久强制做一次全量，兜住「云端补数据超过重叠窗口」的情况 */
-        const val FULL_SYNC_INTERVAL_MS = 7L * 24 * 3600 * 1000
         const val KEY_LAST_CHECKIN_DAY = "last_checkin_day"
     }
 

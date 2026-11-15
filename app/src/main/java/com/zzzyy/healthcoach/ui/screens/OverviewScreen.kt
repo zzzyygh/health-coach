@@ -135,7 +135,7 @@ fun OverviewScreen(state: UiState, viewModel: HealthViewModel) {
                                 text = { Text(label) },
                                 onClick = {
                                     showRangeMenu = false
-                                    viewModel.sync(range)
+                                    viewModel.sync(range, fullPull = true)
                                 },
                             )
                         }
@@ -650,7 +650,7 @@ private fun EmptyOverview(state: UiState, viewModel: HealthViewModel) {
             )
         }
         SYNC_RANGES.forEach { (range, label) ->
-            TextButton(onClick = { viewModel.sync(range) }, enabled = !state.syncing) {
+            TextButton(onClick = { viewModel.sync(range, fullPull = true) }, enabled = !state.syncing) {
                 Text(label)
             }
         }

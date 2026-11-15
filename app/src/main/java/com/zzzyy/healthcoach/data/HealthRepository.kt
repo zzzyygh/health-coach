@@ -41,6 +41,8 @@ class HealthRepository(context: Context) {
         val cloudError: String? = null,
         val rootAvailable: Boolean = false,
         val tokenUsable: Boolean = false,
+        /** 本次云端实际拉到的原始记录条数（0 通常意味着手机上的小米运动健康还没同步） */
+        val cloudRecords: Int = 0,
     )
 
     fun loadDays(): List<HealthDay> = store.loadDays()
@@ -82,6 +84,7 @@ class HealthRepository(context: Context) {
         var cloudDays = 0
         var localError: String? = null
         var cloudError: String? = null
+        var cloudRecords = 0
 
         // ── 本地 ──────────────────────────────────────────────
         val rootAvailable = RootShell.isAvailable()
@@ -102,9 +105,10 @@ class HealthRepository(context: Context) {
         val tokenUsable = token.isUsable
         if (tokenUsable) {
             try {
-                val cloud = pullCloud(token, days, incrementalSince)
-                cloudDays = cloud.size
-                if (cloud.isNotEmpty()) store.mergeDays(cloud)
+                val pull = pullCloud(token, days, incrementalSince)
+                cloudDays = pull.days.size
+                cloudRecords = pull.records
+                if (pull.days.isNotEmpty()) store.mergeDays(pull.days)
             } catch (e: Exception) {
                 cloudError = e.message ?: e.javaClass.simpleName
             }
@@ -125,6 +129,7 @@ class HealthRepository(context: Context) {
             cloudError = cloudError,
             rootAvailable = rootAvailable,
             tokenUsable = tokenUsable,
+            cloudRecords = cloudRecords,
         )
     }
 
@@ -137,11 +142,13 @@ class HealthRepository(context: Context) {
      * 现在把它加进 `CLOUD_KEYS` 实测验证，见那里的注释。
      * 云端的 sleep 记录里**有** rem / awake / awake_count / items，字段名与本地一致。
      */
+    private data class CloudPull(val days: List<HealthDay>, val records: Int)
+
     private suspend fun pullCloud(
         token: com.zzzyy.healthcoach.data.cloud.MiToken,
         days: Int,
         incrementalSince: Long = 0L,
-    ): List<HealthDay> {
+    ): CloudPull {
         val client = MiCloudClient(token)
         val windowStart = epochSecondsOf(daysAgoIso(days))
         // 增量：上次同步成功之后再往前留 6 小时重叠（防止跨零点/补数据漏掉），
@@ -153,6 +160,7 @@ class HealthRepository(context: Context) {
                 "增量水位 ${if (incrementalSince > 0) isoOf(incrementalSince) else "无"}）",
         )
         val buckets = linkedMapOf<String, HealthDay>()
+        var recordCount = 0
         val hrSamples = linkedMapOf<String, MutableList<Int>>()
         val spo2Samples = linkedMapOf<String, MutableList<Int>>()
 
@@ -195,6 +203,7 @@ class HealthRepository(context: Context) {
                 )
                 continue
             }
+            recordCount += records.size
             for (record in records) {
                 val date = isoOf(record.time)
                 when (key) {
@@ -362,9 +371,10 @@ class HealthRepository(context: Context) {
 
         android.util.Log.i(
             TAG,
-            "云端本轮共发出 ${client.requestCount} 个请求（窗口 ${isoOf(since)} 起）",
+            "云端本轮共发出 ${client.requestCount} 个请求（窗口 ${isoOf(since)} 起），" +
+                "拿到 $recordCount 条原始记录",
         )
-        return buckets.values.filter { it.hasData }
+        return CloudPull(buckets.values.filter { it.hasData }, recordCount)
     }
 
     companion object {

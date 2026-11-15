@@ -1,29 +1,43 @@
 package com.zzzyy.healthcoach.data.cloud
 
+import java.util.Calendar
+import java.util.TimeZone
+
 /**
- * 决定「这次同步要拉多久的数据」。
+ * 同步起点判定。
  *
- * 背景：早期实现每次都按用户选的窗口（30/90 天）**全量重拉**，
- * 一次 90 天大约要发 60~80 个请求（steps 13 页、heart_rate 19 页、spo2 19 页…）。
- * 一天里多点几次「同步」，请求量就翻几倍 —— 这才是真正的风控风险来源，
- * 而不是「同步这件事本身」。
+ * 设计（2026-11-15 按用户意见定的口径）：
+ *  - **首次同步**（从没同步过）→ 全量，把历史拉回来；
+ *  - **之后每天第一次打开** → 只拉「昨天 00:00 起」，也就是昨天一整天 + 今天；
+ *  - 拉完如果**一条新数据都没有** → 不是我们出错，多半是手机上的小米运动健康还没同步，
+ *    这时提示用户「先去小米运动健康同步一次，再回来重试」（见 HealthViewModel）。
  *
- * 规则：
- *  1. 从没同步过 / 距上次**全量**超过 [fullIntervalMs] → 返回 0（做一次全量，兜住云端延迟补数据）；
- *  2. 否则只拉「上次同步时间 - [overlapSeconds]」之后的部分。
- *     留重叠是为了防止跨零点、以及云端把昨夜数据延迟几小时才写入时被漏掉。
+ * 为什么用「昨天 00:00」而不是「上次同步时间 − 6 小时」：
+ *  - 语义更清楚，用户和我都能一眼看懂窗口是哪一段；
+ *  - 覆盖完整自然日，云端把昨夜数据延迟几小时补写也落在窗口内；
+ *  - 不会因为「上次同步发生在昨晚 23:50」而只拉 10 分钟的数据。
  */
-internal fun incrementalSinceSeconds(
+internal fun syncStartSeconds(
     lastSyncAtMillis: Long,
-    lastFullSyncAtMillis: Long,
     nowMillis: Long,
-    overlapSeconds: Long,
-    fullIntervalMs: Long,
+    zone: TimeZone = TimeZone.getDefault(),
 ): Long {
     if (lastSyncAtMillis <= 0L) return 0L
-    val fullDue = lastFullSyncAtMillis <= 0L || nowMillis - lastFullSyncAtMillis > fullIntervalMs
-    if (fullDue) return 0L
-    val since = lastSyncAtMillis / 1000L - overlapSeconds
-    // 时间出现倒流（改过系统时间）时退回全量，别算出个未来时间导致一条都不拉
-    return if (since <= 0L || since * 1000L > nowMillis) 0L else since
+    val startMillis = yesterdayStartMillis(nowMillis, zone)
+    val startSeconds = startMillis / 1000
+    // 系统时间被改到很早以前时，算出来的起点会是负数或「未来时间」——
+    // 这两种情况一律退回全量，避免上游把负数当成「有水位」而一条都不拉。
+    return if (startSeconds <= 0L || startMillis > nowMillis) 0L else startSeconds
+}
+
+/** 本地时区的「昨天 00:00:00」毫秒时间戳。 */
+internal fun yesterdayStartMillis(nowMillis: Long, zone: TimeZone = TimeZone.getDefault()): Long {
+    val calendar = Calendar.getInstance(zone)
+    calendar.timeInMillis = nowMillis
+    calendar.set(Calendar.HOUR_OF_DAY, 0)
+    calendar.set(Calendar.MINUTE, 0)
+    calendar.set(Calendar.SECOND, 0)
+    calendar.set(Calendar.MILLISECOND, 0)
+    calendar.add(Calendar.DAY_OF_YEAR, -1)
+    return calendar.timeInMillis
 }
