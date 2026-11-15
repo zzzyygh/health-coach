@@ -529,9 +529,18 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
     fun loginWithPassTokenManual(userId: String, passToken: String) {
         viewModelScope.launch {
             if (userId.isBlank() || passToken.isBlank()) {
+                android.util.Log.w(
+                    "HealthCoach.Login",
+                    "手动登录被拒：userId 为空=${userId.isBlank()}，passToken 为空=${passToken.isBlank()}",
+                )
                 _state.value = _state.value.copy(statusMessage = "userId 和 passToken 都要填")
                 return@launch
             }
+            // 只打长度，绝不打内容
+            android.util.Log.i(
+                "HealthCoach.Login",
+                "手动登录开始：userId 长度=${userId.trim().length}，passToken 长度=${passToken.trim().length}",
+            )
             _state.value = _state.value.copy(statusMessage = "正在用 passToken 登录…")
             try {
                 val token = MiAuth().loginWithPassToken(
@@ -540,11 +549,17 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                     deviceId = "",
                 )
                 tokenStore.save(token)
+                android.util.Log.i(
+                    "HealthCoach.Login",
+                    "手动登录结果：isUsable=${token.isUsable}，有 serviceToken=${token.serviceToken.isNotBlank()}，" +
+                        "有 ssecurity=${token.ssecurity.isNotBlank()}",
+                )
                 _state.value = _state.value.copy(
                     tokenUsable = token.isUsable,
                     statusMessage = if (token.isUsable) "登录成功，可以同步云端数据了" else "凭证不完整，检查 passToken 是否正确",
                 )
             } catch (e: Exception) {
+                android.util.Log.e("HealthCoach.Login", "手动登录失败：${e.javaClass.simpleName} ${e.message}")
                 _state.value = _state.value.copy(
                     statusMessage = "登录失败：${e.message ?: e.javaClass.simpleName}",
                 )

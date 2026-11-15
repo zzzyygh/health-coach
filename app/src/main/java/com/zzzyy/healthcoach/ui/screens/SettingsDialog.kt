@@ -218,6 +218,21 @@ fun SettingsDialog(
                     Text("获取登录二维码")
                 }
 
+                // 不扫码的主路径：在**小米官方页面**里输入账号密码，本应用只取 cookie 换票据
+                var showWebLogin by remember { mutableStateOf(false) }
+                TextButton(onClick = { showWebLogin = true }) {
+                    Text("用小米账号密码登录（不用扫码）")
+                }
+                if (showWebLogin) {
+                    MiAccountLoginDialog(
+                        onDismiss = { showWebLogin = false },
+                        onCollected = { userId, passToken ->
+                            showWebLogin = false
+                            viewModel.loginWithPassTokenManual(userId, passToken)
+                        },
+                    )
+                }
+
                 // 扫码失败时的兜底：passToken 从浏览器 cookie 拿，不依赖任何 App 的扫码能力
                 var showManual by remember { mutableStateOf(false) }
                 var manualUserId by remember { mutableStateOf("") }
