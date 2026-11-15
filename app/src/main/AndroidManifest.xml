@@ -21,6 +21,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- 账号密码登录：独立 Activity 承载 WebView（Dialog 窗口里 WebView 会白屏） -->
+        <activity
+            android:name=".MiLoginActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.HealthCoach" />
     </application>
 
 </manifest>

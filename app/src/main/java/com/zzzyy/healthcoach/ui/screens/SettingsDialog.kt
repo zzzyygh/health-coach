@@ -1,6 +1,9 @@
 package com.zzzyy.healthcoach.ui.screens
 
 import androidx.compose.foundation.Image
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import com.zzzyy.healthcoach.MiLoginActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -218,19 +221,29 @@ fun SettingsDialog(
                     Text("获取登录二维码")
                 }
 
-                // 不扫码的主路径：在**小米官方页面**里输入账号密码，本应用只取 cookie 换票据
-                var showWebLogin by remember { mutableStateOf(false) }
-                TextButton(onClick = { showWebLogin = true }) {
-                    Text("用小米账号密码登录（不用扫码）")
-                }
-                if (showWebLogin) {
-                    MiAccountLoginDialog(
-                        onDismiss = { showWebLogin = false },
-                        onCollected = { userId, passToken ->
-                            showWebLogin = false
-                            viewModel.loginWithPassTokenManual(userId, passToken)
-                        },
+                // 不扫码的主路径：在**独立 Activity + 小米官方页面**里输入账号密码。
+                // ⚠️ 不能用 Compose Dialog 承载 WebView —— Dialog 自建窗口没开硬件加速，
+                // WebView 会白屏（页面加载完了但合成不出来）。
+                val loginContext = LocalContext.current
+                val loginLauncher = rememberLauncherForActivityResult(
+                    ActivityResultContracts.StartActivityForResult(),
+                ) { result ->
+                    val data = result.data
+                    val ok = result.resultCode == android.app.Activity.RESULT_OK && data != null
+                    val uid = data?.getStringExtra(MiLoginActivity.EXTRA_USER_ID).orEmpty()
+                    val pt = data?.getStringExtra(MiLoginActivity.EXTRA_PASS_TOKEN).orEmpty()
+                    android.util.Log.i(
+                        "HealthCoach.Login",
+                        "登录页返回：ok=$ok，有 userId=${uid.isNotEmpty()}，有 passToken=${pt.isNotEmpty()}",
                     )
+                    if (ok && uid.isNotEmpty() && pt.isNotEmpty()) {
+                        viewModel.loginWithPassTokenManual(uid, pt)
+                    }
+                }
+                TextButton(onClick = {
+                    loginLauncher.launch(android.content.Intent(loginContext, MiLoginActivity::class.java))
+                }) {
+                    Text("用小米账号密码登录（不用扫码）")
                 }
 
                 // 扫码失败时的兜底：passToken 从浏览器 cookie 拿，不依赖任何 App 的扫码能力
