@@ -207,6 +207,19 @@ data class SleepSummary(
          * `bed_timestamp` 是躺下的时间，`bedtime` 是判定入睡的时间，
          * 两者之差就是潜伏期。超过 2 小时或为负都视为无效（设备没记录）。
          */
+        /**
+         * 取一个整数字段，并做范围校验。
+         * 云端的 `avg_hrv` 之类可能是浮点（如 45.6），`optInt` 会截断 —— 对 HRV 这种
+         * 「看趋势不看小数」的指标足够；超出 [range] 视为脏数据返回 null。
+         */
+        private fun intOrNull(json: JSONObject, key: String, range: IntRange): Int? {
+            if (!json.has(key)) return null
+            val value = json.optDouble(key, Double.NaN)
+            if (value.isNaN()) return null
+            val rounded = Math.round(value).toInt()
+            return rounded.takeIf { it in range }
+        }
+
         private fun latencyOf(json: JSONObject): Int? {
             val bedTs = json.optLong("bed_timestamp", 0L)
             val bedtime = json.optLong("bedtime", 0L)
@@ -237,10 +250,13 @@ data class SleepSummary(
                 awakeMinutes = json.optInt("sleep_awake_duration", 0),
                 awakeCount = json.optInt("awake_count", 0),
                 efficiency = json.optInt("sleep_efficiency", 0).takeIf { it in 1..100 },
-                averageHeartRate = null,
-                averageHrv = null,
-                averageSpo2 = null,
-                averageBreath = null,
+                // 云端 sleep 记录里**确实有**这些预聚合值（实测字段清单）：
+                // avg_hr / avg_hrv / avg_spo2 / avg_breath / min_spo2 / max_hr / min_hr。
+                // 旧实现把它们全写成 null，导致无 root 用户在这几项上恒为「无数据」。
+                averageHeartRate = intOrNull(json, "avg_hr", 25..220),
+                averageHrv = intOrNull(json, "avg_hrv", 1..300),
+                averageSpo2 = intOrNull(json, "avg_spo2", 50..100),
+                averageBreath = intOrNull(json, "avg_breath", 4..40),
                 latencyMinutes = latencyOf(json),
                 minSpo2 = json.optInt("min_spo2", 0).takeIf { it in 50..100 },
                 stages = parseStages(json),

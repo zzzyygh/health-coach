@@ -23,6 +23,9 @@ class MiCloudClient(
     private val token: MiToken,
     private val client: OkHttpClient = defaultClient(),
 ) {
+    /** 本客户端实例打出去的网络请求数（用于观察「一次同步到底发了多少请求」）。 */
+    var requestCount: Int = 0
+        private set
 
     /** 云端返回的一条原始记录。 */
     data class Record(
@@ -47,6 +50,7 @@ class MiCloudClient(
 
     /** 调用一个 hlth.io.mi.com 接口，返回解密后的 JSON。 */
     suspend fun call(path: String, payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        requestCount++
         val nonce = MiCrypto.generateNonce(0)
         val plain = payload.toString()
         val params = MiCrypto.encryptQueryParams(
@@ -158,6 +162,9 @@ class MiCloudClient(
             }
             collected += page.records
             pages++
+            // 节流：小米 App 自己是低频增量同步，我们连续翻页时不要「背靠背」发请求，
+            // 每页之间留 250ms，降低被风控判定为爬虫的概率。
+            kotlinx.coroutines.delay(PAGE_INTERVAL_MS)
             if (page.records.minOf { it.time } <= since) {
                 exhausted = true
                 break
@@ -183,6 +190,8 @@ class MiCloudClient(
 
     companion object {
         private const val TAG = "HealthCoach.Cloud"
+        /** 翻页之间的最小间隔，见 pullSince 里的说明。 */
+        private const val PAGE_INTERVAL_MS = 250L
 
         const val PATH_FITNESS_BY_TIME = "/app/v1/data/get_fitness_data_by_time"
 

@@ -1,6 +1,7 @@
 package com.zzzyy.healthcoach.data
 
 import android.content.Context
+import com.zzzyy.healthcoach.data.analysis.nightHeartRateStats
 import com.zzzyy.healthcoach.data.cloud.MiCloudClient
 import com.zzzyy.healthcoach.data.cloud.MiTokenStore
 import com.zzzyy.healthcoach.data.local.MiHealthLocalDb
@@ -10,6 +11,7 @@ import com.zzzyy.healthcoach.data.model.HealthDay
 import com.zzzyy.healthcoach.data.model.HeartRateSummary
 import com.zzzyy.healthcoach.data.model.SleepSummary
 import com.zzzyy.healthcoach.data.model.Spo2Summary
+import com.zzzyy.healthcoach.data.model.StressSummary
 import com.zzzyy.healthcoach.data.store.HealthStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -73,7 +75,7 @@ class HealthRepository(context: Context) {
     suspend fun hasRoot(): Boolean = withContext(Dispatchers.IO) { RootShell.isAvailable() }
 
     /** 拉取最近 [days] 天的数据并合并入库。 */
-    suspend fun sync(days: Int = 30): SyncReport = withContext(Dispatchers.IO) {
+    suspend fun sync(days: Int = 30, incrementalSince: Long = 0L): SyncReport = withContext(Dispatchers.IO) {
         val sinceDate = daysAgoIso(days)
         android.util.Log.i(TAG, "sync 开始：范围 $days 天（since=$sinceDate）")
         var localDays = 0
@@ -100,7 +102,7 @@ class HealthRepository(context: Context) {
         val tokenUsable = token.isUsable
         if (tokenUsable) {
             try {
-                val cloud = pullCloud(token, days)
+                val cloud = pullCloud(token, days, incrementalSince)
                 cloudDays = cloud.size
                 if (cloud.isNotEmpty()) store.mergeDays(cloud)
             } catch (e: Exception) {
@@ -138,9 +140,18 @@ class HealthRepository(context: Context) {
     private suspend fun pullCloud(
         token: com.zzzyy.healthcoach.data.cloud.MiToken,
         days: Int,
+        incrementalSince: Long = 0L,
     ): List<HealthDay> {
         val client = MiCloudClient(token)
-        val since = epochSecondsOf(daysAgoIso(days))
+        val windowStart = epochSecondsOf(daysAgoIso(days))
+        // 增量：上次同步成功之后再往前留 6 小时重叠（防止跨零点/补数据漏掉），
+        // 这样「一天内的第二次同步」只翻一两页，而不是把 90 天全量重拉一遍。
+        val since = if (incrementalSince > 0) maxOf(windowStart, incrementalSince) else windowStart
+        android.util.Log.i(
+            TAG,
+            "云端拉取窗口：${isoOf(since)} 起（窗口起点 ${isoOf(windowStart)}，" +
+                "增量水位 ${if (incrementalSince > 0) isoOf(incrementalSince) else "无"}）",
+        )
         val buckets = linkedMapOf<String, HealthDay>()
         val hrSamples = linkedMapOf<String, MutableList<Int>>()
         val spo2Samples = linkedMapOf<String, MutableList<Int>>()
@@ -154,10 +165,28 @@ class HealthRepository(context: Context) {
         // 云端静息心率：以前以为「云端没有」，但那是旧结论，现在按实验验证一遍。
         // 若云端确实没有，这个 key 会返回 0 条或报错 —— 下面的 try/catch 保证不影响其它 key。
         val restingByDay = linkedMapOf<String, Int>()
+        val stressSamples = linkedMapOf<String, MutableList<Int>>()
+        // 逐条心率采样（epochSeconds, bpm）：云端没有「夜间平均心率」这种预聚合字段，
+        // 只能拿原始采样自己算（见 NightHeartRate.kt）
+        val allHrSamples = mutableListOf<Pair<Long, Int>>()
         val loggedKeys = mutableSetOf<String>()
+        var sleepPayloadLogged = false
         for (key in CLOUD_KEYS) {
             val records = try {
                 client.pullSince(key, since, maxPages = maxPages)
+            } catch (auth: com.zzzyy.healthcoach.data.cloud.MiCloudClient.AuthException) {
+                // 实测过「第一个 key 报 401、后面 7 个却成功」的瞬时失效，先重试一次再放弃
+                android.util.Log.w(TAG, "云端 key=$key 首次 401，2 秒后重试一次")
+                kotlinx.coroutines.delay(2000)
+                try {
+                    client.pullSince(key, since, maxPages = maxPages)
+                } catch (e: Exception) {
+                    android.util.Log.w(
+                        TAG,
+                        "云端 key=$key 重试后仍失败，跳过：${e.javaClass.simpleName} ${e.message}",
+                    )
+                    continue
+                }
             } catch (e: Exception) {
                 // 单个 key 失败不能拖垮整次同步（旧实现是会抛到外层、整段云端全丢）
                 android.util.Log.w(
@@ -169,6 +198,18 @@ class HealthRepository(context: Context) {
             for (record in records) {
                 val date = isoOf(record.time)
                 when (key) {
+                    "stress" -> {
+                        val v = record.value.optInt("stress", -1)
+                        if (v in 1..100) {
+                            stressSamples.getOrPut(date) { mutableListOf() }.add(v)
+                        } else if (loggedKeys.add(key)) {
+                            android.util.Log.w(
+                                TAG,
+                                "云端 stress 字段不认识，value 的键=${record.value.keys().asSequence().toList()}",
+                            )
+                        }
+                    }
+
                     "resting_heart_rate" -> {
                         val bpm = record.value.optInt("bpm", 0)
                         if (bpm in 25..220) {
@@ -206,6 +247,7 @@ class HealthRepository(context: Context) {
                         val bpm = record.value.optInt("bpm", 0)
                         if (bpm in 25..220) {
                             hrSamples.getOrPut(date) { mutableListOf() }.add(bpm)
+                            allHrSamples.add(record.time to bpm)
                         }
                     }
 
@@ -217,6 +259,15 @@ class HealthRepository(context: Context) {
                     }
 
                     "sleep" -> {
+                        // 云端 sleep 的真实字段名只能靠观测，先打一次键名清单（不含值），
+                        // 用来判断 HRV / 呼吸率 / 潜伏期这些字段云端到底给不给。
+                        if (!sleepPayloadLogged) {
+                            sleepPayloadLogged = true
+                            android.util.Log.i(
+                                TAG,
+                                "云端 sleep 字段清单=${record.value.keys().asSequence().toList()}",
+                            )
+                        }
                         val sleep = SleepSummary.fromCloudJson(record.value) ?: continue
                         val day = bucket(date)
                         val existing = day.sleep
@@ -253,6 +304,52 @@ class HealthRepository(context: Context) {
             val day = bucket(date)
             buckets[date] = day.copy(restingHeartRate = bpm)
         }
+        stressSamples.forEach { (date, samples) ->
+            val day = bucket(date)
+            buckets[date] = day.copy(
+                stress = StressSummary(
+                    average = Math.round(samples.average()).toInt(),
+                    max = samples.max(),
+                    min = samples.min(),
+                    sampleCount = samples.size,
+                )
+            )
+        }
+        // 用逐条心率补出夜间心率三件套（无 root 用户只靠云端也能参与评分的这两项）
+        var nightHrFilled = 0
+        buckets.entries.toList().forEach { entry ->
+            val sleep = entry.value.sleep ?: return@forEach
+            val stats = nightHeartRateStats(sleep.startMillis, sleep.endMillis, allHrSamples)
+            if (stats.average == null) return@forEach
+            nightHrFilled++
+            buckets[entry.key] = entry.value.copy(
+                sleep = sleep.copy(
+                    averageHeartRate = sleep.averageHeartRate ?: stats.average,
+                    firstHalfHeartRate = sleep.firstHalfHeartRate ?: stats.firstHalf,
+                    secondHalfHeartRate = sleep.secondHalfHeartRate ?: stats.secondHalf,
+                )
+            )
+        }
+        android.util.Log.i(
+            TAG,
+            "云端夜间心率：用 ${allHrSamples.size} 条采样补出 $nightHrFilled 晚的平均/前后半夜心率",
+        )
+        // 证据日志：云端 sleep 自带的预聚合值覆盖了多少晚（无 root 用户的评分完整度就看这个）
+        val cloudSleeps = buckets.values.mapNotNull { it.sleep }
+        android.util.Log.i(
+            TAG,
+            "云端睡眠字段覆盖：共 ${cloudSleeps.size} 晚，" +
+                "心率=${cloudSleeps.count { it.averageHeartRate != null }}，" +
+                "HRV=${cloudSleeps.count { it.averageHrv != null }}，" +
+                "平均血氧=${cloudSleeps.count { it.averageSpo2 != null }}，" +
+                "呼吸=${cloudSleeps.count { it.averageBreath != null }}，" +
+                "最低血氧=${cloudSleeps.count { it.minSpo2 != null }}",
+        )
+        android.util.Log.i(
+            TAG,
+            "云端压力：拿到 ${stressSamples.size} 天" +
+                if (stressSamples.isEmpty()) "（该 key 云端没有数据）" else "",
+        )
         android.util.Log.i(
             TAG,
             "云端静息心率：拿到 ${restingByDay.size} 天" +
@@ -263,6 +360,10 @@ class HealthRepository(context: Context) {
             android.util.Log.d(TAG, "云端静息心率日期：${restingByDay.keys.sorted()}")
         }
 
+        android.util.Log.i(
+            TAG,
+            "云端本轮共发出 ${client.requestCount} 个请求（窗口 ${isoOf(since)} 起）",
+        )
         return buckets.values.filter { it.hasData }
     }
 
@@ -277,6 +378,8 @@ class HealthRepository(context: Context) {
             "spo2",
             "sleep",
             "resting_heart_rate",
+            // 探针：旧注释说「云端没有压力」，但同样从未真正请求过，先请求再说
+            "stress",
         )
 
         fun daysAgoIso(days: Int): String {

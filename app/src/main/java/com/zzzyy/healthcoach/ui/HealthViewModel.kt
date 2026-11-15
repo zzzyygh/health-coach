@@ -150,9 +150,27 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
 
     fun sync(days: Int = 30, force: Boolean = false, alsoCheckIn: Boolean = false) {
         viewModelScope.launch {
-            if (force) android.util.Log.i("HealthCoach.Sync", "强制同步（忽略限频）：$days 天")
+            // 增量水位：上次同步成功时间往前留 6 小时重叠。
+            // 以前每次同步都是「按天全量重拉」（90 天约 60~80 个请求），
+            // 一天内多点几次就会把请求量翻几倍 —— 这才是真实的风控风险来源。
+            val lastSyncAt = syncPrefs.getLong(KEY_LAST_SYNC, 0L)
+            val lastFullSyncAt = syncPrefs.getLong(KEY_LAST_FULL_SYNC, 0L)
+            // 判定逻辑抽成纯函数（data/cloud/SyncCadence.kt），有单测覆盖
+            val incrementalSince = com.zzzyy.healthcoach.data.cloud.incrementalSinceSeconds(
+                lastSyncAtMillis = lastSyncAt,
+                lastFullSyncAtMillis = lastFullSyncAt,
+                nowMillis = System.currentTimeMillis(),
+                overlapSeconds = INCREMENTAL_OVERLAP_SECONDS,
+                fullIntervalMs = FULL_SYNC_INTERVAL_MS,
+            )
+            android.util.Log.i(
+                "HealthCoach.Sync",
+                "开始同步：$days 天，force=$force，" +
+                    "上次同步=${if (lastSyncAt > 0) java.util.Date(lastSyncAt) else "从未"}，" +
+                    "增量水位=${if (incrementalSince > 0) java.util.Date(incrementalSince * 1000) else "全量"}",
+            )
             _state.value = _state.value.copy(syncing = true, syncDetail = null)
-            val report = repository.sync(days)
+            val report = repository.sync(days, incrementalSince)
             val detail = buildString {
                 append("本地 ${report.localDays} 天")
                 if (report.localError != null) append("（${report.localError}）")
@@ -160,10 +178,15 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                 if (report.cloudError != null) append("（${report.cloudError}）")
                 append("，共 ${report.totalDays} 天")
             }
+            val finishedAt = System.currentTimeMillis()
             syncPrefs.edit()
-                .putLong(KEY_LAST_SYNC, System.currentTimeMillis())
+                .putLong(KEY_LAST_SYNC, finishedAt)
                 .putString(KEY_LAST_SYNC_DAY, loggingDayKey())
                 .apply()
+            // 只有「本次确实是全量」才刷新全量水位，否则会把下次也误判成刚全量过
+            if (incrementalSince == 0L) {
+                syncPrefs.edit().putLong(KEY_LAST_FULL_SYNC, finishedAt).apply()
+            }
             val loaded = repository.loadDays()
             _state.value = _state.value.copy(
                 syncing = false,
@@ -601,6 +624,11 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val KEY_LAST_SYNC = "last_sync_at"
         const val KEY_LAST_SYNC_DAY = "last_sync_day"
+        const val KEY_LAST_FULL_SYNC = "last_full_sync_at"
+        /** 增量同步的重叠窗口：防止跨零点/云端延迟补写被漏掉 */
+        const val INCREMENTAL_OVERLAP_SECONDS = 6 * 3600L
+        /** 每隔这么久强制做一次全量，兜住「云端补数据超过重叠窗口」的情况 */
+        const val FULL_SYNC_INTERVAL_MS = 7L * 24 * 3600 * 1000
         const val KEY_LAST_CHECKIN_DAY = "last_checkin_day"
     }
 
