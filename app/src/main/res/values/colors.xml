@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 图标底板色：取自图标本体（深墨绿 #00362E），
+         自适应图标的前景裁切块与它同色，拼在一起看不出接缝 -->
+    <color name="ic_launcher_background">#FF00362E</color>
+</resources>

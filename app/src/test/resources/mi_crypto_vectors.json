@@ -1,0 +1,39 @@
+{
+  "_note": "由 .work/gen-crypto-vectors.py 生成，Kotlin MiCrypto 必须产出完全相同的结果",
+  "ssecurity": "dGVzdC1zc2VjdXJpdHktMzItYnl0ZXMtbG9uZyE=",
+  "nonce": "AAAAAAAAAAAAAAAAAAAAAA==",
+  "signedNonce": "1u6CTCagxS1AQaHFcKh0ADPxCfRUAkuyJMQT2OPxmrw=",
+  "rc4Key": "1u6CTCagxS1AQaHFcKh0ADPxCfRUAkuyJMQT2OPxmrw=",
+  "encrypt": {
+    "method": "GET",
+    "path": "/app/v1/data/get_fitness_data_by_time",
+    "params": {
+      "data": "{\"key\":\"steps\",\"reverse\":false,\"startTime\":0,\"endTime\":0}"
+    },
+    "result": {
+      "data": "+9jqej8dWJFSySOcXqD2lvFlYdt47HFnmIkp0O2H+gr3Ur3Eey01MiJAANzR+tsZXPihHuaJniJs",
+      "rc4_hash__": "uCAj8lUJX4rgAdFsP4CxxXBO73h2JMkJiys7mg==",
+      "signature": "MYG9LyMGdhfqG46Ne6CNofLLbo8=",
+      "_nonce": "AAAAAAAAAAAAAAAAAAAAAA=="
+    }
+  },
+  "decrypt": {
+    "body": "+9jicCJaQIkRkWSeSPGv2PciLcUo83021s1y56/O5AS3e6HL",
+    "expected": "{\"code\":0,\"result\":{\"list\":[1,2,3]}}"
+  },
+  "rc4KAT": {
+    "empty": "",
+    "zeros": "gPqBH0Y/YrMhvUbsLYLatIMAF74KnxRFou9IvJ7i1iiEJty2D3lcX0diOuz92L53OKzIc4OrpBIRl01WviJeOA==",
+    "ff": "fwV+4LnAnUzeQrkT0n0lS3z/6EH1YOu6XRC3Q2EdKdd72SNJ8IajoLidxRMCJ0GIx1M3jHxUW+3uaLKpQd2hxw==",
+    "ascii": "9JLkPzdKC9BKnSSeQvW0lOVvb55g6nk10c8nyvuQ9lzsQ/zabgMlfyMNXQ=="
+  },
+  "nonceShape": {
+    "decodedLength": 12,
+    "minuteBytes": [
+      1,
+      200,
+      107,
+      130
+    ]
+  }
+}
