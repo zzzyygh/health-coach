@@ -1,5 +1,7 @@
 package com.zzzyy.healthcoach.data.advice
 
+import com.zzzyy.healthcoach.data.analysis.NOISE_THRESHOLD
+import com.zzzyy.healthcoach.data.analysis.nightDeltas
 import com.zzzyy.healthcoach.data.model.FeedbackEntry
 import com.zzzyy.healthcoach.data.model.HealthDay
 import com.zzzyy.healthcoach.data.model.InterventionEntry
@@ -273,6 +275,111 @@ object AdvicePrompt {
         builder.appendLine("2. **和前一晚对比**：是突然变差还是连续几晚都这样？这决定要不要当作趋势来处理；")
         builder.appendLine("3. 结合主观感受、前一天的活动和干预，推测最可能的原因；")
         builder.appendLine("4. 给出**今晚就能调整**的 2~3 条具体做法。")
+        return builder.toString()
+    }
+
+    /**
+     * 两晚对比：**昨晚 vs 前晚**，逐项差值 + 是否超出个人日常波动。
+     *
+     * 与其他模式的区别：这里不追求「全面」，只回答一个问题 ——
+     * 这两晚的差别，是真实的改变，还是本来就这么跳？
+     *
+     * 差值和个人标准差都由代码算好（[nightDeltas]，有单测），模型只负责解释
+     * 那些确实超出波动的项；没超出的必须明说「属日常波动」，不允许硬编原因。
+     *
+     * @param history 近 30 天（用于估计个人波动）
+     */
+    fun buildNightCompare(
+        last: HealthDay,
+        prev: HealthDay,
+        history: List<HealthDay>,
+        feedback: List<FeedbackEntry>,
+        interventions: List<InterventionEntry> = emptyList(),
+    ): String {
+        val builder = StringBuilder()
+        val lastSleep = last.sleep
+        val prevSleep = prev.sleep
+
+        builder.appendLine("## 两晚的原始数据")
+        builder.appendLine()
+        builder.appendLine("指标 | ${prev.date}（前晚） | ${last.date}（昨晚）")
+        builder.appendLine("---|---|---")
+        builder.appendLine(
+            "入睡 | ${prevSleep?.let { clockOf(it.startMillis) } ?: "无记录"} | " +
+                "${lastSleep?.let { clockOf(it.startMillis) } ?: "无记录"}"
+        )
+        builder.appendLine(
+            "卧床(h) | ${prevSleep?.hours ?: "-"} | ${lastSleep?.hours ?: "-"}"
+        )
+        builder.appendLine("深睡(分) | ${prevSleep?.deepMinutes ?: "-"} | ${lastSleep?.deepMinutes ?: "-"}")
+        builder.appendLine("REM(分) | ${prevSleep?.remMinutes ?: "-"} | ${lastSleep?.remMinutes ?: "-"}")
+        builder.appendLine("清醒(分/次) | ${prevSleep?.let { "${it.awakeMinutes}/${it.awakeCount}" } ?: "-"} | ${lastSleep?.let { "${it.awakeMinutes}/${it.awakeCount}" } ?: "-"}")
+        builder.appendLine("效率(%) | ${prevSleep?.efficiency ?: "-"} | ${lastSleep?.efficiency ?: "-"}")
+        builder.appendLine("夜间心率 | ${prevSleep?.averageHeartRate ?: "-"} | ${lastSleep?.averageHeartRate ?: "-"}")
+        builder.appendLine("夜间 HRV | ${prevSleep?.averageHrv ?: "-"} | ${lastSleep?.averageHrv ?: "-"}")
+        builder.appendLine("最低血氧(%) | ${prevSleep?.minSpo2 ?: "-"} | ${lastSleep?.minSpo2 ?: "-"}")
+        builder.appendLine()
+
+        val deltas = nightDeltas(last, prev, history)
+        builder.appendLine("## 差值（已由程序计算，不要自己重算）")
+        builder.appendLine()
+        builder.appendLine("指标 | 前晚 | 昨晚 | 差值 | 你近30天波动(SD) | 是否超出日常波动")
+        builder.appendLine("---|---|---|---|---|---")
+        deltas.forEach { d ->
+            val zText = d.z?.let { String.format("%.1fσ", it) } ?: "无参照"
+            builder.appendLine(
+                listOf(
+                    d.label,
+                    d.format(d.prev),
+                    d.format(d.last),
+                    d.delta?.let { (if (it > 0) "+" else "") + d.format(it) } ?: "—",
+                    d.sd?.let { d.format(it) } ?: "样本不足",
+                    if (d.delta == null) "—" else if (d.worthExplaining) "是（$zText）" else "否（$zText）",
+                ).joinToString(" | ")
+            )
+        }
+        builder.appendLine()
+        builder.appendLine("判定规则：|差值| ≥ 1 个标准差（|z| ≥ ${NOISE_THRESHOLD.toInt()}）才算超出个人日常波动。")
+        builder.appendLine()
+
+        val lastFeedback = feedback.filter { it.date == last.date }
+        if (lastFeedback.isNotEmpty()) {
+            builder.appendLine("## 今早的主观感受")
+            builder.appendLine()
+            lastFeedback.sortedBy { it.timestamp }.forEach { entry ->
+                val parts = buildList {
+                    entry.sleepQuality?.let { add("睡眠质量 $it/5") }
+                    entry.energy?.let { add("精力 $it/5") }
+                    entry.mood?.let { add("心情 $it/5") }
+                    entry.soreness?.let { add("酸痛 $it/5") }
+                    if (entry.symptoms.isNotEmpty()) add("症状：${entry.symptoms.joinToString("、")}")
+                    if (entry.note.isNotBlank()) add("备注：${entry.note}")
+                }
+                if (parts.isNotEmpty()) builder.appendLine("- ${parts.joinToString("，")}")
+            }
+            builder.appendLine()
+        }
+
+        val relevantInterventions = interventions.filter { it.date == last.date || it.date == prev.date }
+        if (relevantInterventions.isNotEmpty()) {
+            builder.appendLine("## 这两天的干预记录")
+            builder.appendLine()
+            relevantInterventions.forEach { builder.appendLine("- ${it.date} ${it.display}") }
+            builder.appendLine()
+        }
+
+        builder.appendLine("## 要求（严格遵守）")
+        builder.appendLine()
+        builder.appendLine("1. **先给结论**：这两晚之间，有没有真正值得注意的差异？一句话回答。")
+        builder.appendLine("2. **只解释标记为「是」的项**。标记为「否」的项，直接用一句话说明「属日常波动，不需要关注」，")
+        builder.appendLine("   不要为它编原因、不要建议改进。")
+        builder.appendLine("3. 如果**所有项都是「否」**，就明确说「两晚没有实质差异」，")
+        builder.appendLine("   并指出这本身是好事（说明波动小），不要硬找话题凑内容。")
+        builder.appendLine("4. 对标记为「是」的项，逐项说明：可能原因 → 混杂因素（佩戴松紧、酒精、晚饭时间、睡前运动、")
+        builder.appendLine("   房间温度）→ 这个差异是单晚偶发还是需要再看几晚。")
+        builder.appendLine("5. 单晚数据本身有测量误差（消费级手环分期与 PSG 一致率约 76%），")
+        builder.appendLine("   任何结论都要标注这个不确定性，不要用确定语气。")
+        builder.appendLine("6. 最后给 **1~2 条**今晚就能做的事，宁可少、要具体；没有把握就说不确定。")
         return builder.toString()
     }
 

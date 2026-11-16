@@ -378,7 +378,11 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
      *
      * @param singleNight true = 只看昨晚（单日诊断），false = 看最近 N 天趋势
      */
-    fun generateAdvice(singleNight: Boolean = false, fullCheckup: Boolean = false) {
+    fun generateAdvice(
+        singleNight: Boolean = false,
+        fullCheckup: Boolean = false,
+        nightCompare: Boolean = false,
+    ) {
         viewModelScope.launch {
             _state.value = _state.value.copy(adviceLoading = true, adviceError = null)
             try {
@@ -390,6 +394,17 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                     singleNight -> allDays.takeLast(3)    // 聚焦诊断：昨晚 + 前两晚
                     else -> allDays.takeLast(window)
                 }
+                // 两晚对比额外需要近 30 天来估计「个人日常波动」，否则无法判断差异是否只是噪声
+                val history30 = allDays.takeLast(30)
+                if (nightCompare && (allDays.size < 2 || allDays.last().sleep == null ||
+                        allDays[allDays.size - 2].sleep == null)
+                ) {
+                    _state.value = _state.value.copy(
+                        adviceLoading = false,
+                        adviceError = "两晚对比需要昨晚和前晚都有睡眠记录，目前缺其中一晚",
+                    )
+                    return@launch
+                }
                 if (days.isEmpty()) {
                     _state.value = _state.value.copy(
                         adviceLoading = false,
@@ -399,7 +414,15 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val feedback = repository.loadFeedback()
                 val interventions = repository.loadInterventions()
-                val prompt = if (fullCheckup) {
+                val prompt = if (nightCompare && allDays.size >= 2) {
+                    AdvicePrompt.buildNightCompare(
+                        last = allDays.last(),
+                        prev = allDays[allDays.size - 2],
+                        history = history30,
+                        feedback = feedback,
+                        interventions = interventions,
+                    )
+                } else if (fullCheckup) {
                     buildFullCheckup(days, feedback, interventions)
                 } else if (singleNight && days.isNotEmpty()) {
                     AdvicePrompt.buildFocused(
@@ -415,6 +438,7 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                     "HealthCoach.Advice",
                     "请求分析：${
                         when {
+                            nightCompare -> "两晚对比（昨晚 vs 前晚）"
                             fullCheckup -> "全身体检"
                             singleNight -> "聚焦诊断（3 晚）"
                             else -> "${days.size} 天趋势"
@@ -433,6 +457,7 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                         date = today,
                         timestamp = System.currentTimeMillis(),
                         model = config.model + when {
+                            nightCompare -> "（两晚对比）"
                             fullCheckup -> "（全身体检·${days.size}天）"
                             singleNight -> "（聚焦3晚）"
                             else -> "（${days.size}天）"

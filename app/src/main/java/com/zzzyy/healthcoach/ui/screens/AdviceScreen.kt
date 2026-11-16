@@ -114,6 +114,21 @@ fun AdviceScreen(state: UiState, viewModel: HealthViewModel) {
 
             Spacer(Modifier.height(8.dp))
             androidx.compose.material3.OutlinedButton(
+                onClick = { viewModel.generateAdvice(nightCompare = true) },
+                enabled = !state.adviceLoading && state.modelConfigured,
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.small,
+            ) {
+                Text("昨晚 vs 前晚（逐项差异 + 噪声判断）")
+            }
+            Text(
+                "差值和个人日常波动都由程序算好，超出 1 个标准差的项才做解释；没超出会直接告诉你「属日常波动」。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.material3.OutlinedButton(
                 onClick = { viewModel.generateAdvice(fullCheckup = true) },
                 enabled = !state.adviceLoading && state.modelConfigured,
                 modifier = Modifier.fillMaxWidth(),
