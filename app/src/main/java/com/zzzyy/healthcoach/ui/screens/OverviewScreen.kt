@@ -237,6 +237,8 @@ fun OverviewScreen(state: UiState, viewModel: HealthViewModel) {
             val openedScore = remember(sleepDay.date, days, state.sleepGoal, subjective) {
                 SleepScorer.score(sleepDay, days, state.sleepGoal, subjectiveQuality = subjective)
             }
+            NightCompareCard(state)
+
             PanelCard(accent = HealthColors.Sleep.copy(alpha = 0.4f)) {
                 SectionHeader(
                     if (sleepOffset == 0) "昨晚睡眠" else "历史睡眠",
@@ -625,6 +627,81 @@ private fun baselineLabel(series: MetricSeries): String? {
     val value = HealthBaselines.format(series.kind, baseline)
     val unit = series.kind.unit
     return "基线 $value $unit · ${series.baselineSampleDays} 天中位数"
+}
+
+/**
+ * 「昨晚 vs 前晚」差异表 —— **不依赖模型**。
+ *
+ * 差值和个人日常波动都在 ViewModel 里算好（见 nightDeltas）。这里只负责展示：
+ * 超出波动的那几项标出来，没超出的明确写「日常波动」，
+ * 全部没超出就直接说「两晚没有实质差异」，不给用户制造不存在的信号。
+ */
+@Composable
+private fun NightCompareCard(state: UiState) {
+    val rows = state.nightCompare
+    val dates = state.nightCompareDates
+    if (rows.isEmpty() || dates.size < 2) return
+
+    val noteworthy = rows.filter { it.worthExplaining }
+    PanelCard(accent = HealthColors.Signal.copy(alpha = 0.35f)) {
+        Eyebrow("昨晚 vs 前晚")
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "${dates[0]} → ${dates[1]}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(10.dp))
+
+        rows.forEach { d ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    d.label,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1.4f),
+                    color = if (d.worthExplaining) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "${d.format(d.prev)} → ${d.format(d.last)}",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.weight(1.3f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    d.delta?.let { (if (it > 0) "+" else "") + d.format(it) } ?: "—",
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.weight(0.8f),
+                    color = if (d.worthExplaining) HealthColors.Amber else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    when {
+                        d.delta == null -> "缺数据"
+                        d.worthExplaining -> "超出波动"
+                        else -> "日常波动"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (d.worthExplaining) HealthColors.Amber
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Text(
+            if (noteworthy.isEmpty()) {
+                "两晚没有实质差异：所有指标都在你自己的日常波动范围内，不需要调整。"
+            } else {
+                "只有 ${noteworthy.joinToString("、") { it.label }} 超出了你近 30 天的日常波动，" +
+                    "其余项属正常起伏。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (noteworthy.isEmpty()) HealthColors.Signal else HealthColors.Amber,
+        )
+    }
 }
 
 @Composable

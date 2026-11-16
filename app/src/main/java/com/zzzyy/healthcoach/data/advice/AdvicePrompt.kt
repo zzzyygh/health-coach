@@ -339,7 +339,11 @@ object AdvicePrompt {
             )
         }
         builder.appendLine()
-        builder.appendLine("判定规则：|差值| ≥ 1 个标准差（|z| ≥ ${NOISE_THRESHOLD.toInt()}）才算超出个人日常波动。")
+        builder.appendLine(
+            "判定规则：**同时**满足「|差值| ≥ 1 个标准差（|z| ≥ ${NOISE_THRESHOLD.toInt()}）」" +
+                "和「|差值| ≥ 该指标有意义的最小差异」才算超出日常波动。" +
+                "后者是为了排除设备误差（血氧 ±2~3%、心率 ±2 bpm 这类变化不是信号）。"
+        )
         builder.appendLine()
 
         val lastFeedback = feedback.filter { it.date == last.date }

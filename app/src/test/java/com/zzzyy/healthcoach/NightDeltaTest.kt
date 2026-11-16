@@ -11,6 +11,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 import java.util.Calendar
 
 /**
@@ -96,6 +97,20 @@ class NightDeltaTest {
         val deep = nightDeltas(last, prev, history).first { it.label == "深睡" }
         assertTrue("掉了 50 分钟远超日常波动", deep.worthExplaining)
         assertTrue(deep.z!! < -NOISE_THRESHOLD)
+    }
+
+    @Test
+    fun `设备误差内的大 z 不算信号`() {
+        // 血氧：历史几乎不变（SD≈1），93→94 会算出 z≈+2，
+        // 但 1% 完全在设备误差内（±2~3%），不能报成「超出波动」。
+        val history = listOf(93, 94, 93, 93, 94, 93, 94, 93, 93, 94).mapIndexed { i, spo2 ->
+            day("2026-11-%02d".format(i + 1), sleep(deep = 70).copy(minSpo2 = spo2))
+        }
+        val prev = day("2026-11-11", sleep(deep = 70).copy(minSpo2 = 93))
+        val last = day("2026-11-12", sleep(deep = 70).copy(minSpo2 = 94))
+        val spo2 = nightDeltas(last, prev, history).first { it.label == "最低血氧" }
+        assertTrue("z 应该很大", abs(spo2.z!!) >= NOISE_THRESHOLD)
+        assertFalse("但没超过设备误差下限，不该解释", spo2.worthExplaining)
     }
 
     @Test

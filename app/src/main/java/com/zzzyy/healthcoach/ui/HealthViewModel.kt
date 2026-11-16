@@ -49,6 +49,10 @@ data class UiState(
     val rootAvailable: Boolean = false,
     /** 仅云端模式：跳过本地库（无 root 场景的等效路径，也用于验证云端数据完整性） */
     val cloudOnly: Boolean = false,
+    /** 昨晚 vs 前晚的逐项差异（含是否超出个人日常波动）；不足两晚时为空 */
+    val nightCompare: List<com.zzzyy.healthcoach.data.analysis.MetricDelta> = emptyList(),
+    /** 参与对比的两个日期，[0]=前晚，[1]=昨晚 */
+    val nightCompareDates: List<String> = emptyList(),
     val tokenUsable: Boolean = false,
     val modelConfigured: Boolean = false,
     val modelPresetId: String = com.zzzyy.healthcoach.data.advice.ModelPreset.MINIMAX.id,
@@ -148,6 +152,7 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                 sleepGoal = goalStore.load(),
             )
             _state.value = _state.value.copy(loading = false)
+            computeNightCompare(_state.value.days)
         }
     }
 
@@ -222,6 +227,7 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
                 tokenUsable = report.tokenUsable,
                 statusMessage = staleNotice ?: _state.value.statusMessage,
             )
+            computeNightCompare(loaded)
             if (alsoCheckIn) maybeShowMorningCheckIn(loaded)
             maybeAutoBackup()
         }
@@ -694,6 +700,35 @@ class HealthViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = _state.value.copy(
             cloudOnly = enabled,
             statusMessage = if (enabled) "已开启仅云端模式：下次同步跳过本地库" else "已关闭仅云端模式",
+        )
+    }
+
+    /**
+     * 计算「昨晚 vs 前晚」的差异表。
+     *
+     * 放在界面上直接展示、不依赖模型：差值和个人波动都是确定性计算，
+     * 没有 API Key 也应该能看到「昨晚哪些项真的动了、哪些只是日常波动」。
+     */
+    private fun computeNightCompare(days: List<HealthDay>) {
+        val withSleep = days.filter { it.sleep != null }
+        if (withSleep.size < 2) {
+            _state.value = _state.value.copy(nightCompare = emptyList(), nightCompareDates = emptyList())
+            return
+        }
+        val prev = withSleep[withSleep.size - 2]
+        val last = withSleep.last()
+        val rows = com.zzzyy.healthcoach.data.analysis.nightDeltas(
+            last = last,
+            prev = prev,
+            history = withSleep.takeLast(30),
+        )
+        android.util.Log.i(
+            "HealthCoach.NightCompare",
+            "对比 ${prev.date} → ${last.date}：${rows.size} 项，超出日常波动 ${rows.count { it.worthExplaining }} 项",
+        )
+        _state.value = _state.value.copy(
+            nightCompare = rows,
+            nightCompareDates = listOf(prev.date, last.date),
         )
     }
 

@@ -26,7 +26,12 @@ data class MetricDelta(
     val sd: Double?,
     /** delta / sd；sd 为 0 或缺失时为 null */
     val z: Double?,
-    /** 是否值得解释：|z| ≥ [NOISE_THRESHOLD]，或没有历史波动可参照但差异明显 */
+    /**
+     * 该指标「有意义的最小差异」。低于它就算 z 很大也不解释 ——
+     * 因为那个差本身还在设备误差内（血氧 ±2~3%、心率 ±2 bpm…）。
+     */
+    val minMeaningful: Double,
+    /** 是否值得解释：**同时**满足 |z| ≥ [NOISE_THRESHOLD] 且 |差值| ≥ [minMeaningful] */
     val worthExplaining: Boolean,
 ) {
     fun format(v: Double?): String = when {
@@ -65,6 +70,7 @@ fun nightDeltas(
     fun metric(
         label: String,
         unit: String,
+        mcd: Double,
         pick: (com.zzzyy.healthcoach.data.model.SleepSummary) -> Double?,
     ): MetricDelta {
         val p = prevSleep?.let(pick)
@@ -72,26 +78,32 @@ fun nightDeltas(
         val sd = series(label, pick)
         val delta = if (p != null && l != null) l - p else null
         val z = if (delta != null && sd != null) delta / sd else null
+        // 双重门槛：既要超出个人波动（|z|≥1），又要超过该指标的测量误差下限。
+        // 少了第二条，像「血氧 93→94」这种设备误差内的变化会被误报成信号。
         val worth = when {
             delta == null -> false
+            abs(delta) < mcd -> false
             z != null -> abs(z) >= NOISE_THRESHOLD
-            // 没有历史波动可参照时，保守一点：只要有差异就值得提，但要求模型说明缺参照
-            else -> abs(delta) > 0
+            // 没有历史波动可参照时，只要超过误差下限就值得提，但要求模型说明缺参照
+            else -> true
         }
-        return MetricDelta(label, unit, p, l, delta, sd, z, worth)
+        return MetricDelta(label, unit, p, l, delta, sd, z, mcd, worth)
     }
 
+    // 第三个参数是「有意义的最小差异」：低于它不解释。
+    // 取值依据设备误差与生理意义，不是随手定的：
+    //   时长 0.5h / 分期各 10min / 效率 3% / 心率 2bpm / HRV 5 / 血氧 3%（设备误差 ±2~3%）/ 入睡 30min
     return listOf(
-        metric("卧床时长", "h") { it.hours },
-        metric("深睡", "分钟") { it.deepMinutes.toDouble() },
-        metric("REM", "分钟") { it.remMinutes.toDouble() },
-        metric("夜间清醒", "分钟") { it.awakeMinutes.toDouble() },
-        metric("睡眠效率", "%") { it.efficiency?.toDouble() },
-        metric("夜间平均心率", "bpm") { it.averageHeartRate?.toDouble() },
-        metric("夜间 HRV", "") { it.averageHrv?.toDouble() },
-        metric("最低血氧", "%") { it.minSpo2?.toDouble() },
-        metric("入睡时刻(距20点)", "分钟") { sleep -> bedMinutesFrom20(sleep.startMillis) },
-        metric("后半夜−前半夜心率", "bpm") { sleep ->
+        metric("卧床时长", "h", 0.5) { it.hours },
+        metric("深睡", "分钟", 10.0) { it.deepMinutes.toDouble() },
+        metric("REM", "分钟", 10.0) { it.remMinutes.toDouble() },
+        metric("夜间清醒", "分钟", 10.0) { it.awakeMinutes.toDouble() },
+        metric("睡眠效率", "%", 3.0) { it.efficiency?.toDouble() },
+        metric("夜间平均心率", "bpm", 2.0) { it.averageHeartRate?.toDouble() },
+        metric("夜间 HRV", "", 5.0) { it.averageHrv?.toDouble() },
+        metric("最低血氧", "%", 3.0) { it.minSpo2?.toDouble() },
+        metric("入睡时刻(距20点)", "分钟", 30.0) { sleep -> bedMinutesFrom20(sleep.startMillis) },
+        metric("后半夜−前半夜心率", "bpm", 5.0) { sleep ->
             val a = sleep.firstHalfHeartRate
             val b = sleep.secondHalfHeartRate
             if (a != null && b != null) (b - a).toDouble() else null
